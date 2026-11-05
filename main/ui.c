@@ -31,6 +31,14 @@ static lv_obj_t *s_chart;
 static lv_chart_series_t *s_ser[INSTR_COUNT];
 static lv_obj_t *s_day_lbl[7];
 static lv_obj_t *s_level_bar, *s_sens_slider, *s_net_lbl;
+static lv_obj_t *s_goals_page, *s_goal_value[INSTR_COUNT], *s_goals_btn;
+static uint16_t s_goal_min[INSTR_COUNT] = { CONFIG_PL_DAILY_GOAL_MIN, CONFIG_PL_DAILY_GOAL_MIN };
+
+typedef struct { instrument_t instr; int delta; } goal_adjust_t;
+static goal_adjust_t s_goal_adjust[INSTR_COUNT * 2] = {
+    { INSTR_CELLO, -5 }, { INSTR_CELLO, 5 },
+    { INSTR_PIANO, -5 }, { INSTR_PIANO, 5 },
+};
 
 static uint32_t s_loaded_version = UINT32_MAX;
 static uint32_t s_loaded_date = UINT32_MAX;
@@ -99,12 +107,36 @@ static void on_sens(lv_event_t *e)
     app_send_cmd(CMD_SET_SENSITIVITY, 36 - v);
 }
 
+static void on_goals(lv_event_t *e)
+{
+    (void)e;
+    lv_obj_remove_flag(s_goals_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_goals_page);
+}
+
+static void on_goals_done(lv_event_t *e)
+{
+    (void)e;
+    lv_obj_add_flag(s_goals_page, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void on_adjust_goal(lv_event_t *e)
+{
+    goal_adjust_t *adjust = lv_event_get_user_data(e);
+    if (!adjust || adjust->instr >= INSTR_COUNT) return;
+    int next = (int)s_goal_min[adjust->instr] + adjust->delta;
+    if (next < 5 || next > 240) return;
+    s_goal_min[adjust->instr] = (uint16_t)next;
+    lv_label_set_text_fmt(s_goal_value[adjust->instr], "%u min", (unsigned)next);
+    app_send_cmd(CMD_SET_GOAL, (int)adjust->instr * 1000 + next);
+    s_loaded_version = UINT32_MAX;
+}
+
 /* ---------- history ---------- */
 
 static void reload_history(uint32_t today)
 {
     static const char *wd[] = { "S", "M", "T", "W", "T", "F", "S" };
-    uint32_t max_min = 30;
     uint32_t mins[7][INSTR_COUNT] = { 0 };
 
     for (int i = 0; i < 7; i++) {
@@ -118,9 +150,6 @@ static void reload_history(uint32_t today)
         }
         for (int k = 0; k < INSTR_COUNT; k++) {
             mins[i][k] = r.secs[k] / 60;
-            if (mins[i][k] > max_min) {
-                max_min = mins[i][k];
-            }
         }
         if (today) {
             struct tm tm = { .tm_year = (int)(d / 10000) - 1900, .tm_mon = (int)(d / 100 % 100) - 1,
@@ -132,10 +161,13 @@ static void reload_history(uint32_t today)
         }
         lv_obj_set_style_text_color(s_day_lbl[i], i == 6 ? COL_TEXT : COL_DIM, 0);
     }
-    lv_chart_set_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, 0, (int32_t)max_min);
+    lv_chart_set_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
     for (int i = 0; i < 7; i++) {
         for (int k = 0; k < INSTR_COUNT; k++) {
-            lv_chart_set_value_by_id(s_chart, s_ser[k], i, (int32_t)mins[i][k]);
+            uint32_t goal = s_goal_min[k] ? s_goal_min[k] : 1;
+            uint32_t pct = mins[i][k] * 100u / goal;
+            if (pct > 100) pct = 100;
+            lv_chart_set_value_by_id(s_chart, s_ser[k], i, (int32_t)pct);
         }
     }
     lv_chart_refresh(s_chart);
@@ -217,6 +249,14 @@ static void ui_tick(lv_timer_t *t)
         lv_obj_set_hidden(s_end_btn, true);
     }
 
+    /* The badge reports a fresh model score for the current session only. */
+    if (L.state != SS_IDLE && !L.set_by_user && L.n_notes >= IDENTIFY_NOTES) {
+        snprintf(buf, sizeof(buf), "%d%%", (int)(L.confidence * 100.0f + 0.5f));
+        set_status(buf, L.confidence >= 0.80f ? COL_GREEN : COL_AMBER);
+    } else {
+        set_status("--%", lv_color_hex(0x3A3F45));
+    }
+
     /* instrument row = indicator: the running session's instrument, or the last
      * session's while it can still be corrected; otherwise nothing lit */
     int want = -1;
@@ -243,14 +283,17 @@ static void ui_tick(lv_timer_t *t)
         secs[L.instrument] += (uint32_t)(live_ms / 1000);
     }
     uint32_t total_min = (secs[INSTR_CELLO] + secs[INSTR_PIANO]) / 60;
-    snprintf(buf, sizeof(buf), "%lu / %d min", (unsigned long)total_min, CONFIG_PL_DAILY_GOAL_MIN);
+    uint32_t combined_goal = s_goal_min[INSTR_CELLO] + s_goal_min[INSTR_PIANO];
+    if (!combined_goal) combined_goal = 1;
+    snprintf(buf, sizeof(buf), "%lu / %lu min", (unsigned long)total_min, (unsigned long)combined_goal);
     lv_label_set_text(s_today_total, buf);
-    lv_bar_set_value(s_goal_bar, (int32_t)(total_min > CONFIG_PL_DAILY_GOAL_MIN ? CONFIG_PL_DAILY_GOAL_MIN : total_min),
-                     LV_ANIM_ON);
-    lv_obj_set_style_bg_color(s_goal_bar, total_min >= CONFIG_PL_DAILY_GOAL_MIN ? COL_GREEN : COL_PIANO,
+    lv_bar_set_range(s_goal_bar, 0, (int32_t)combined_goal);
+    lv_bar_set_value(s_goal_bar, (int32_t)(total_min > combined_goal ? combined_goal : total_min), LV_ANIM_ON);
+    lv_obj_set_style_bg_color(s_goal_bar, total_min >= combined_goal ? COL_GREEN : COL_PIANO,
                               LV_PART_INDICATOR);
-    snprintf(buf, sizeof(buf), "#E0A458 Cello# %lu min      #6FA8DC Piano# %lu min",
-             (unsigned long)(secs[INSTR_CELLO] / 60), (unsigned long)(secs[INSTR_PIANO] / 60));
+    snprintf(buf, sizeof(buf), "#E0A458 Cello# %lu/%u min    #6FA8DC Piano# %lu/%u min",
+             (unsigned long)(secs[INSTR_CELLO] / 60), (unsigned)s_goal_min[INSTR_CELLO],
+             (unsigned long)(secs[INSTR_PIANO] / 60), (unsigned)s_goal_min[INSTR_PIANO]);
     lv_label_set_text(s_today_split, buf);
 
     /* mic level relative to the noise floor */
@@ -281,6 +324,11 @@ static void ui_tick(lv_timer_t *t)
 
 void ui_init(float sens_db)
 {
+    s_goal_min[INSTR_CELLO] = (uint16_t)store_get_setting("goal_cello", CONFIG_PL_DAILY_GOAL_MIN);
+    s_goal_min[INSTR_PIANO] = (uint16_t)store_get_setting("goal_piano", CONFIG_PL_DAILY_GOAL_MIN);
+    for (int i = 0; i < INSTR_COUNT; i++) {
+        if (s_goal_min[i] < 5 || s_goal_min[i] > 240) s_goal_min[i] = CONFIG_PL_DAILY_GOAL_MIN;
+    }
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
@@ -341,7 +389,7 @@ void ui_init(float sens_db)
     s_goal_bar = lv_bar_create(scr);
     lv_obj_set_size(s_goal_bar, 440, 10);
     lv_obj_align(s_goal_bar, LV_ALIGN_TOP_MID, 0, 266);
-    lv_bar_set_range(s_goal_bar, 0, CONFIG_PL_DAILY_GOAL_MIN);
+    lv_bar_set_range(s_goal_bar, 0, s_goal_min[INSTR_CELLO] + s_goal_min[INSTR_PIANO]);
     lv_obj_set_style_bg_color(s_goal_bar, COL_PANEL, LV_PART_MAIN);
 
     s_today_split = label(scr, &lv_font_montserrat_14, COL_DIM, "");
@@ -393,6 +441,65 @@ void ui_init(float sens_db)
 
     s_net_lbl = label(scr, &lv_font_montserrat_14, COL_DIM, "");
     lv_obj_align(s_net_lbl, LV_ALIGN_BOTTOM_RIGHT, -20, -18);
+
+    s_goals_btn = lv_button_create(scr);
+    lv_obj_set_size(s_goals_btn, 68, 30);
+    lv_obj_set_pos(s_goals_btn, 292, 18);
+    lv_obj_set_style_bg_color(s_goals_btn, COL_PANEL, 0);
+    lv_obj_add_event_cb(s_goals_btn, on_goals, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *goals_caption = label(s_goals_btn, &lv_font_montserrat_14, COL_TEXT, "Goals");
+    lv_obj_center(goals_caption);
+
+    s_goals_page = lv_obj_create(scr);
+    lv_obj_set_size(s_goals_page, 480, 480);
+    lv_obj_set_pos(s_goals_page, 0, 0);
+    lv_obj_set_scrollable(s_goals_page, false);
+    lv_obj_set_style_bg_color(s_goals_page, COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_goals_page, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_goals_page, 0, 0);
+    lv_obj_add_flag(s_goals_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *goals_title = label(s_goals_page, &lv_font_montserrat_28, COL_TEXT, "PRACTICE GOALS");
+    lv_obj_set_pos(goals_title, 24, 22);
+    const instrument_t instruments[] = { INSTR_CELLO, INSTR_PIANO };
+    const char *names[] = { "CELLO GOAL", "PIANO GOAL" };
+    for (int row = 0; row < INSTR_COUNT; row++) {
+        instrument_t instr = instruments[row];
+        lv_obj_t *card = lv_obj_create(s_goals_page);
+        lv_obj_set_size(card, 440, 126);
+        lv_obj_set_pos(card, 20, 82 + row * 146);
+        lv_obj_set_style_bg_color(card, COL_PANEL, 0);
+        lv_obj_set_style_border_width(card, 0, 0);
+        lv_obj_set_style_radius(card, 16, 0);
+        lv_obj_set_scrollable(card, false);
+        lv_obj_t *name = label(card, &lv_font_montserrat_18, COL_TEXT, names[row]);
+        lv_obj_set_pos(name, 20, 16);
+        s_goal_value[instr] = label(card, &lv_font_montserrat_24, COL_TEXT, "30 min");
+        lv_obj_set_width(s_goal_value[instr], 110);
+        lv_obj_set_style_text_align(s_goal_value[instr], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_goal_value[instr], LV_ALIGN_BOTTOM_MID, 0, -14);
+        lv_label_set_text_fmt(s_goal_value[instr], "%u min", (unsigned)s_goal_min[instr]);
+        lv_obj_t *minus = lv_button_create(card);
+        lv_obj_set_size(minus, 60, 44);
+        lv_obj_set_pos(minus, 82, 64);
+        lv_obj_add_event_cb(minus, on_adjust_goal, LV_EVENT_CLICKED, &s_goal_adjust[instr * 2]);
+        lv_obj_t *minus_text = label(minus, &lv_font_montserrat_24, COL_TEXT, "-");
+        lv_obj_center(minus_text);
+        lv_obj_t *plus = lv_button_create(card);
+        lv_obj_set_size(plus, 60, 44);
+        lv_obj_set_pos(plus, 298, 64);
+        lv_obj_add_event_cb(plus, on_adjust_goal, LV_EVENT_CLICKED, &s_goal_adjust[instr * 2 + 1]);
+        lv_obj_t *plus_text = label(plus, &lv_font_montserrat_24, COL_TEXT, "+");
+        lv_obj_center(plus_text);
+    }
+    lv_obj_t *goal_hint = label(s_goals_page, &lv_font_montserrat_14, COL_DIM,
+                                "5-minute steps  •  5 to 240 min  •  bars fill to each goal");
+    lv_obj_set_pos(goal_hint, 20, 383);
+    lv_obj_t *done = lv_button_create(s_goals_page);
+    lv_obj_set_size(done, 160, 44);
+    lv_obj_align(done, LV_ALIGN_BOTTOM_MID, 0, -24);
+    lv_obj_add_event_cb(done, on_goals_done, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *done_text = label(done, &lv_font_montserrat_18, COL_TEXT, "Done");
+    lv_obj_center(done_text);
 
     lv_timer_create(ui_tick, 200, NULL);
 }

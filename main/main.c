@@ -251,6 +251,14 @@ static void audio_task(void *arg)
                 det_set_sensitivity(&det, (float)c.value);
                 store_set_setting("sens", c.value);
                 break;
+            case CMD_SET_GOAL: {
+                int instr = c.value / 1000;
+                int minutes = c.value % 1000;
+                if (instr >= 0 && instr < INSTR_COUNT && minutes >= 5 && minutes <= 240) {
+                    store_set_setting(instr == INSTR_CELLO ? "goal_cello" : "goal_piano", minutes);
+                }
+                break;
+            }
             }
         }
 

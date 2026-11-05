@@ -56,6 +56,15 @@ You don't need to touch it at all.
    - Every session is appended to a CSV file.
    - The running session is checkpointed every 30 s, so unplugging loses at most 30 s.
 
+## Screen and goals
+
+The top-right badge shows the live model confidence as a percentage once the
+current session has enough note evidence; `--%` means no fresh score is
+available. The Goals screen lets you set separate Cello and Piano targets in
+5-minute steps (5–240 minutes). They are stored on the board. The weekly chart
+scales each instrument's bars to its own goal, with days at or above goal shown
+at full height.
+
 ## Build & flash
 
 Requires ESP-IDF 5.3 or newer. It was built and tested with v5.4.2.

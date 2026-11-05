@@ -45,6 +45,7 @@ typedef enum {
     CMD_SET_INSTRUMENT,    /* during a session: override; after: correct the last one */
     CMD_END_SESSION,
     CMD_SET_SENSITIVITY,
+    CMD_SET_GOAL,          /* value: instrument * 1000 + minutes */
 } app_cmd_type_t;
 
 typedef struct {

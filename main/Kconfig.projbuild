@@ -22,9 +22,12 @@ menu "Practice Logger"
               China       CST-8
 
     config PL_DAILY_GOAL_MIN
-        int "Daily practice goal (minutes)"
+        int "Default daily goal for each instrument (minutes)"
         default 30
-        range 1 600
+        range 5 240
+        help
+            Used as the initial Piano and Cello goal. Change each goal
+            independently from the touchscreen Goals screen after startup.
 
     config PL_START_HOLD_S
         int "Seconds of playing before a session starts"
