@@ -102,9 +102,9 @@ static time_t wall_of(int64_t mono_ms)
 
 /* ---------- instrument labelling & learning ---------- */
 
-/* The session that just ended stays correctable for a while; what the model
- * learns from it is applied when that window closes (or the next session
- * starts), so a correction is learned instead of the mistake. */
+/* The session that just ended stays correctable for a while; apply learning
+ * only after an explicit user label, so a confident classifier mistake cannot
+ * reinforce itself when the correction window closes. */
 typedef struct {
     bool valid;
     int64_t end_ms;
@@ -125,22 +125,13 @@ static void apply_learning(pending_t *p, cls_model_t *model)
     }
     p->valid = false;
 
-    float rate;
-    if (p->by_user) {
-        rate = 0.3f;                        /* corrections teach the most */
-    } else if (p->confirmed) {
-        rate = 0.2f;
-    } else if (p->confidence >= 0.95f) {
-        rate = 0.1f;                        /* gentle self-training on clear cases */
-    } else {
-        rate = 0.0f;                        /* unsure and unconfirmed: learn nothing */
-    }
-    bool trust_time = p->by_user || p->confirmed || p->confidence >= 0.8f;
-    if (rate <= 0.0f && !trust_time) {
+    if (!p->by_user && !p->confirmed) {
+        ESP_LOGI(TAG, "skipping model update for unconfirmed %s session (confidence %.2f)",
+                 INSTR_NAMES[p->label], p->confidence);
         return;
     }
-    cls_learn(model, rate > 0 ? p->feat : NULL, rate > 0 ? p->fvalid : NULL, p->label,
-              trust_time ? p->hour : -1, rate);
+    float rate = p->by_user ? 0.3f : 0.2f;
+    cls_learn(model, p->feat, p->fvalid, p->label, p->hour, rate);
     store_save_model(model);
     ESP_LOGI(TAG, "model updated from %s session (rate %.2f%s)", INSTR_NAMES[p->label], rate,
              p->by_user ? ", user label" : "");

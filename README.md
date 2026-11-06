@@ -50,10 +50,8 @@ You don't need to touch it at all.
      If the session is paused, the tap resumes its timer; detected playing then keeps
      it running as usual.
    - **Learning:** the board adapts its cello and piano profiles to *your* instruments and
-     room.
-     - It learns most from your corrections.
-     - It also learns a little from sessions it was very sure about.
-     - It never learns from sessions it was unsure of and you didn't confirm.
+     room only from sessions you label or confirm. Automatic predictions are never used
+     as training data, so a mistaken prediction cannot reinforce itself.
 6. **Storage**
    - Daily totals are kept in flash for about 2 years.
    - Every session is appended to a CSV file.
