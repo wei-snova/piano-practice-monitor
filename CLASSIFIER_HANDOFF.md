@@ -196,7 +196,7 @@ Check rates over several seeds.
 
 | Weakness | Evidence | Status |
 |---|---|---|
-| **Plucked cello reads as piano.** Tuning by plucking open strings (typically the day's first cello session) or pizzicato fades and darkens exactly like piano. After ~25 s of plucking, bowing needs 17–27 s to win. | Synthetic tuning test | Fix proposed on branch `fix/cello-tuning-reads-as-piano`: a note that holds level and colour (or has clear vibrato) can only be bowed; once ≥ 4 notes and ≥ 15 % of notes are like that, the session is decided for cello. Piano makes ≤ 2 such notes a minute, bowed cello ~40. Bowing then wins in 6–19 s; nothing else changes. |
+| **Plucked cello reads as piano.** Tuning by plucking open strings (typically the day's first cello session) or pizzicato fades and darkens exactly like piano. After ~25 s of plucking, bowing needs 17–27 s to win. | Synthetic tuning test | Fix proposed in PR #1 (branch `fix/cello-tuning-reads-as-piano`): a note that holds level and colour (or has clear vibrato) can only be bowed; once ≥ 4 notes and ≥ 15 % of notes are like that, the session is decided for cello. Piano makes ≤ 2 such notes a minute, bowed cello ~40. Bowing then wins in 6–19 s; nothing else changes. |
 | Sessions of only very short notes (fast scales, fast détaché) | Synthetic tests | Corrections help, slowly (see above). |
 | One label per session | By design | Switching instruments within 90 s merges them. A change-point detector on the evidence stream would fix it. |
 | Self-training can reinforce its own mistakes | By design (rate 0.1 at ≥ 0.95 confidence; hour histogram at ≥ 0.8) | Simulated only with correctly labelled sessions. A confident mistake that nobody corrects moves the wrong profile; watch for drift on real data. |
