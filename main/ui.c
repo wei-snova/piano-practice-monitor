@@ -5,9 +5,19 @@
 #include <time.h>
 
 #include "bsp/esp-bsp.h"
+#include "bsp/esp32_s3_touch_lcd_4b.h"
+#include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "esp_log.h"
+#include "esp_lcd_panel_commands.h"
+#include "esp_lcd_panel_io_additions.h"
+#include "esp_lcd_st7701.h"
 #include "lvgl.h"
 #include "net.h"
+#include "sdkconfig.h"
 #include "store.h"
+
+static const char *TAG = "ui";
 
 /* Values are chosen to stay neutral after the panel's RGB565 quantisation. */
 #define COL_BG      lv_color_hex(0xF5F9F5)
@@ -31,10 +41,12 @@
 /* The built-in Montserrat fonts have no U+00B7, so separators use this glyph. */
 #define DOT " " LV_SYMBOL_BULLET " "
 
-#define PAUSE_SHOW_MS   10000
+#define PAUSE_SHOW_MS   3000
 #define IDENTIFY_NOTES  8
 #define DIM_AFTER_MS    120000
 #define DISPLAY_OFF_AFTER_MS 300000
+#define BRIGHTNESS_AWAKE_PERCENT 100
+#define BRIGHTNESS_DIM_PERCENT   80
 #define SWIPE_MIN_DISTANCE 48
 
 typedef enum {
@@ -81,6 +93,41 @@ static int s_brightness = -1;
 static bool s_touch_start_valid;
 static page_t s_touch_start_page;
 static lv_point_t s_touch_start;
+static uint32_t s_power_last_activity_ms;
+static bool s_panel_enabled = true;
+static esp_lcd_panel_io_handle_t s_panel_control_io;
+
+static esp_err_t init_panel_control_io(void)
+{
+    if (s_panel_control_io) return ESP_OK;
+    esp_io_expander_handle_t expander = bsp_io_expander_init();
+    if (!expander) return ESP_FAIL;
+
+    spi_line_config_t lines = {
+        .cs_io_type = IO_TYPE_EXPANDER,
+        .cs_expander_pin = IO_EXPANDER_PIN_NUM_0,
+        .scl_io_type = IO_TYPE_EXPANDER,
+        .scl_expander_pin = IO_EXPANDER_PIN_NUM_2,
+        .sda_io_type = IO_TYPE_EXPANDER,
+        .sda_expander_pin = IO_EXPANDER_PIN_NUM_1,
+        .io_expander = expander,
+    };
+    esp_lcd_panel_io_3wire_spi_config_t config = ST7701_PANEL_IO_3WIRE_SPI_CONFIG(lines, 0);
+    return esp_lcd_new_panel_io_3wire_spi(&config, &s_panel_control_io);
+}
+
+static esp_err_t set_panel_enabled(bool enabled)
+{
+    if (enabled == s_panel_enabled) return ESP_OK;
+    if (!s_panel_control_io) return ESP_ERR_INVALID_STATE;
+    uint8_t command = enabled ? LCD_CMD_DISPON : LCD_CMD_DISPOFF;
+    esp_err_t err = esp_lcd_panel_io_tx_param(s_panel_control_io, command, NULL, 0);
+    if (err == ESP_OK) {
+        s_panel_enabled = enabled;
+        ESP_LOGI(TAG, "LCD controller display %s", enabled ? "on" : "off");
+    }
+    return err;
+}
 
 typedef struct {
     instrument_t instr;
@@ -236,8 +283,41 @@ static uint32_t live_seconds_for(const live_state_t *live, instrument_t instr)
 static void set_brightness(int pct)
 {
     if (pct != s_brightness) {
-        bsp_display_brightness_set(pct);
-        s_brightness = pct;
+        esp_err_t err = ESP_OK;
+        if (pct == 0) {
+            esp_err_t panel_err = set_panel_enabled(false);
+            if (panel_err != ESP_OK) {
+                ESP_LOGE(TAG, "LCD controller display-off failed: %s", esp_err_to_name(panel_err));
+            }
+            err = bsp_display_brightness_set(0);
+            if (err == ESP_OK) {
+                err = ledc_stop(LEDC_LOW_SPEED_MODE, CONFIG_BSP_DISPLAY_BRIGHTNESS_LEDC_CH, 1);
+            }
+            if (err == ESP_OK) err = gpio_reset_pin(BSP_LCD_BACKLIGHT);
+            if (err == ESP_OK) err = gpio_set_direction(BSP_LCD_BACKLIGHT, GPIO_MODE_OUTPUT);
+            if (err == ESP_OK) err = gpio_set_level(BSP_LCD_BACKLIGHT, 1);
+            if (err == ESP_OK) ESP_LOGI(TAG, "Backlight pin held high; display off");
+        } else {
+            if (s_brightness == 0) {
+                esp_err_t panel_err = set_panel_enabled(true);
+                if (panel_err != ESP_OK) {
+                    ESP_LOGE(TAG, "LCD controller display-on failed: %s", esp_err_to_name(panel_err));
+                }
+            }
+            if (err == ESP_OK && s_brightness == 0) {
+                err = gpio_reset_pin(BSP_LCD_BACKLIGHT);
+                if (err == ESP_OK) {
+                    err = ledc_set_pin(BSP_LCD_BACKLIGHT, LEDC_LOW_SPEED_MODE,
+                                       CONFIG_BSP_DISPLAY_BRIGHTNESS_LEDC_CH);
+                }
+            }
+            if (err == ESP_OK) err = bsp_display_brightness_set(pct);
+        }
+        if (err == ESP_OK) {
+            s_brightness = pct;
+        } else {
+            ESP_LOGE(TAG, "backlight update to %d%% failed: %s", pct, esp_err_to_name(err));
+        }
     }
 }
 
@@ -262,6 +342,7 @@ static void on_page_touch(lv_event_t *event)
     if (!indev) return;
     page_t page = (page_t)(intptr_t)lv_event_get_user_data(event);
     if (lv_event_get_code(event) == LV_EVENT_PRESSED) {
+        s_power_last_activity_ms = lv_tick_get();
         if (s_wifi_dialog && !lv_obj_has_flag(s_wifi_dialog, LV_OBJ_FLAG_HIDDEN)) return;
         if (lv_event_get_target(event) == s_diag_sens_slider) return;   /* a drag is not a swipe */
         lv_indev_get_point(indev, &s_touch_start);
@@ -823,15 +904,23 @@ static void ui_tick(lv_timer_t *timer)
         s_last_auto_instr = INSTR_COUNT;
     }
 
-    uint32_t inactive_ms = lv_display_get_inactive_time(NULL);
-    bool idle = live.state == SS_IDLE;
-    int brightness = !idle || inactive_ms <= DIM_AFTER_MS ? 80
-                   : inactive_ms >= DISPLAY_OFF_AFTER_MS ? 0 : 10;
+    uint32_t now_ms = lv_tick_get();
+    /* A quiet pause can leave a session open for five minutes. Only actual
+     * detected sound should keep the backlight awake during that interval. */
+    if (live.active) s_power_last_activity_ms = now_ms;
+    uint32_t inactive_ms = now_ms - s_power_last_activity_ms;
+    int brightness = inactive_ms <= DIM_AFTER_MS ? BRIGHTNESS_AWAKE_PERCENT
+                   : inactive_ms >= DISPLAY_OFF_AFTER_MS ? 0 : BRIGHTNESS_DIM_PERCENT;
     set_brightness(brightness);
 }
 
 void ui_init(float sens_db)
 {
+    esp_err_t panel_io_err = init_panel_control_io();
+    if (panel_io_err != ESP_OK) {
+        ESP_LOGE(TAG, "LCD control interface init failed: %s", esp_err_to_name(panel_io_err));
+    }
+
     s_goal_min[INSTR_CELLO] = (uint16_t)store_get_setting("goal_cello", CONFIG_PL_DAILY_GOAL_MIN);
     s_goal_min[INSTR_PIANO] = (uint16_t)store_get_setting("goal_piano", CONFIG_PL_DAILY_GOAL_MIN);
     for (int i = 0; i < INSTR_COUNT; i++) {
@@ -848,5 +937,6 @@ void ui_init(float sens_db)
     create_diagnostics_page(sens_db);
     create_goals_page();
     show_page(PAGE_PIANO);
+    s_power_last_activity_ms = lv_tick_get();
     lv_timer_create(ui_tick, 200, NULL);
 }

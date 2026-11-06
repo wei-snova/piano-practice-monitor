@@ -84,9 +84,11 @@ at its IP address.
 Preview images for the four pages and Wi-Fi form are in `docs/ui-preview.png`
 and `docs/wifi-setup-preview.png`. They illustrate the layout; live values vary.
 
-After five minutes with no touch and no active session, the backlight turns off;
-touching the screen wakes it while audio monitoring continues. The weekly bars
-scale to each instrument's goal and fill at 100% when the goal is met.
+After two minutes without a touch or detected sound, the backlight dims to 80%;
+after five minutes it turns fully off, even if a silent practice session is
+still within its pause window. Touch or detected sound wakes the display while
+audio monitoring continues. The weekly bars scale to each instrument's goal and
+fill at 100% when the goal is met.
 
 ## Build & flash
 
