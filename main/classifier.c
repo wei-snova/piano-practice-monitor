@@ -16,6 +16,21 @@
 #define ATTACK_SPAN      5.0f
 #define ATTACK_MAX_VOTE  1.0f
 #define NOTE_VOTE_CAP    1.5f       /* one note can't decide a session alone */
+/* A note that holds its level and its tone colour for a while, or has clear
+ * vibrato, can only come from a bow: a struck or plucked string always fades
+ * and darkens. Plucked cello (tuning, pizzicato) sounds just like piano, so
+ * struck-sounding evidence is ambiguous, but held notes are not.
+ * Piano makes at most ~2 held-looking notes a minute (pedal, string beating);
+ * bowed cello makes ~40. So once enough of the session's notes are held, it is
+ * a cello session, however piano-like the plucked tuning before it was.
+ * (Held notes still cast their normal vote; only the proportion is decisive,
+ * so the odd held-looking piano note changes nothing.) */
+#define BOWED_MIN_HOPS   12         /* ~0.4 s of note body */
+#define BOWED_MAX_DECAY  2.0f       /* dB/s: fades slower than any piano note */
+#define BOWED_MAX_DARKEN 2.0f       /* dB/s: keeps its colour */
+#define BOWED_DECISIVE_N    4
+#define BOWED_DECISIVE_FRAC 0.15f
+#define BOWED_DECISIVE_LOGIT (-4.0f)
 #define AUDIO_WEIGHT     0.5f
 #define TIME_PRIOR_CAP   1.5f
 #define MIN_VALID_NOTES  5          /* per feature, for the session mean to be trusted */
@@ -235,6 +250,12 @@ static void finish_note(cls_session_t *s, const cls_model_t *m)
     feat[F_PITCH] = clampf(log2f(median(s->f0, n)), LO[F_PITCH], HI[F_PITCH]);
     valid[F_PITCH] = true;
 
+    bool held = valid[F_SLOPE] && valid[F_DARKEN] && body_end - peak >= BOWED_MIN_HOPS &&
+                feat[F_SLOPE] > -BOWED_MAX_DECAY && feat[F_DARKEN] > -BOWED_MAX_DARKEN;
+    bool vibrato = valid[F_VIBRATO] && feat[F_VIBRATO] >= VIB_THRESHOLD + VIB_SPAN;
+    if (held || vibrato) {
+        s->n_bowed++;
+    }
     /* short notes are measured poorly: let long notes carry the decision */
     float w = clampf((float)(n - 4) / 12.0f, 0.25f, 1.0f);
     s->logit_audio += w * cls_note_logit(m, feat, valid);
@@ -329,7 +350,12 @@ static float time_logit(const cls_model_t *m, int hour)
 
 float cls_p_piano(const cls_session_t *s, const cls_model_t *m, int hour)
 {
-    float logit = AUDIO_WEIGHT * s->logit_audio + time_logit(m, hour);
+    float audio = s->logit_audio;
+    if (s->n_bowed >= BOWED_DECISIVE_N && (float)s->n_bowed >= BOWED_DECISIVE_FRAC * (float)s->n_notes &&
+        audio > BOWED_DECISIVE_LOGIT) {
+        audio = BOWED_DECISIVE_LOGIT;
+    }
+    float logit = AUDIO_WEIGHT * audio + time_logit(m, hour);
     return 1.0f / (1.0f + expf(-logit));
 }
 

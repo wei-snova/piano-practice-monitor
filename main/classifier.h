@@ -22,6 +22,13 @@
  * Features that a short note cannot measure reliably are left out of that
  * note's vote.
  *
+ * Struck-sounding notes are ambiguous (a plucked cello string, as in tuning or
+ * pizzicato, fades and darkens just like a piano note). A note that holds its
+ * level and colour, or has clear vibrato, can only be bowed. Once at least 4
+ * notes and 15 % of the session's notes are like that, the session is decided
+ * for cello. Without this, tuning at the start of a cello session reads as
+ * piano for a long time.
+ *
  * Each note votes for the closer instrument profile, the votes add up over
  * the session, and a weak time-of-day prior (when you usually practise each
  * instrument) breaks ties. Because you never play both at once, the whole
@@ -74,6 +81,7 @@ typedef struct {
     float note_attack;
     /* accumulated */
     int   n_notes;
+    int   n_bowed;                     /* notes only a bow can make (held level and colour) */
     float logit_audio;                 /* > 0 favours piano */
     float feat_sum[CLS_NFEAT];
     int   feat_n[CLS_NFEAT];
