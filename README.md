@@ -162,8 +162,9 @@ Results, in a quiet room and in a noisy one:
 | Cello: vibrato, straight tone, fast detaché | correct |
 | Piano: melody, chords, low notes with pedal | correct |
 | 4-minute mixed sessions (scales + pieces + chords) | 20/20 correct |
+| Cello session that starts with ~25 s of plucked tuning | reads Piano while plucking; cello 6–19 s after bowing starts |
 | A session of *only* fast piano scales | **wrong**: very short notes carry too little evidence |
-| Same, after correcting three such sessions | correct (cello still correct) |
+| Same, after correcting such sessions | right in 3–5 of 8 test runs after 3 corrections, 7 of 8 after 6 (cello still correct) |
 
 So expect the first sessions on your real instruments to need the odd tap. Each
 correction teaches it. To speed this up, play each instrument for a few minutes and
