@@ -16,6 +16,7 @@
 #include "detector.h"
 #include "esp_codec_dev.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -199,6 +200,7 @@ static void audio_task(void *arg)
     float dec_state = 0;
     int64_t last_ckpt = 0;
     int log_div = 0;
+    bool pause_reported = false;
     const int64_t correct_window_ms = CONFIG_PL_CORRECT_WINDOW_MIN * 60 * 1000LL;
 
     ESP_LOGI(TAG, "listening (gain %d dB, sensitivity %.0f dB)", CONFIG_PL_MIC_GAIN_DB, dp.sens_db);
@@ -234,6 +236,12 @@ static void audio_task(void *arg)
                     override_set = true;                 /* "this one is piano" */
                     override_instr = (instrument_t)c.value;
                     label = override_instr;
+                    /* A manual label tap during a paused, open session is also
+                     * an explicit sign that practice is still underway. */
+                    if (sess.state == SS_PRACTICING) {
+                        sess.last_active = t;
+                        pause_reported = false;
+                    }
                 } else if (pending.valid) {
                     if ((instrument_t)c.value != pending.label) {
                         store_relabel_last((instrument_t)c.value);   /* fix the last session */
@@ -268,6 +276,18 @@ static void audio_task(void *arg)
         time_t start_wall = wall_of(sess.start);
         sess_event_t ev = force_end ? session_force_end(&sess, &dur)
                                     : session_update(&sess, o.active, t, &dur);
+
+        if (sess.state == SS_PRACTICING && o.active) {
+            pause_reported = false;
+        } else if (sess.state == SS_PRACTICING && !pause_reported &&
+                   t - sess.last_active >= 10000) {
+            ESP_LOGW(TAG, "no music activity detected for 10s: level %.1f dB, floor %.1f dB, "
+                     "activity %.2f, sensitivity %.1f dB",
+                     o.level_db, o.floor_db, o.activity, det.p.sens_db);
+            pause_reported = true;
+        } else if (sess.state == SS_IDLE) {
+            pause_reported = false;
+        }
 
         if (before == SS_IDLE && sess.state == SS_CANDIDATE) {
             cls_reset(&cls);                              /* fresh evidence per session */
@@ -357,6 +377,7 @@ static void audio_task(void *arg)
 
 void app_main(void)
 {
+    ESP_LOGI(TAG, "boot reset reason=%d", (int)esp_reset_reason());
     ESP_ERROR_CHECK(store_init());
     s_cmd_q = xQueueCreate(8, sizeof(app_cmd_t));
 

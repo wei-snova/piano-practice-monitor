@@ -36,10 +36,11 @@ menu "Practice Logger"
 
     config PL_STOP_GAP_S
         int "Seconds of silence that end a session"
-        default 90
+        default 300
         range 15 900
         help
-            Pauses shorter than this (page turns, re-tuning, a quick break)
+            Pauses shorter than this (page turns, re-tuning, or brief detection
+            dropouts)
             stay inside the session. The trailing silence is not counted.
 
     config PL_MIN_SESSION_S

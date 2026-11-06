@@ -21,8 +21,9 @@ You don't need to touch it at all.
    Speech glides in pitch, and noise has none, so neither counts.
 3. **Session logic**
    - Playing for 5 s starts a session, back-dated to when you began.
-   - Pauses under 90 s stay inside the session (page turns, tuning, a quick rest).
-   - After 90 s of silence the session ends. The trailing silence is not counted.
+   - Pauses under 5 minutes stay inside the session (page turns, tuning, a quick
+     rest, or a temporary detection dropout).
+   - After 5 minutes of silence the session ends. The trailing silence is not counted.
    - Sessions under 1 minute are discarded.
 4. **Instrument, detected automatically.** The audio is cut into notes, and each note is
    measured for the things that physically differ between a struck and a bowed string:
@@ -46,6 +47,8 @@ You don't need to touch it at all.
    - **After a session:** for 15 minutes the screen shows *"Last: Cello 24 min – wrong?
      tap Piano"*. One tap fixes that day's totals and the log.
    - **During a session:** tapping an instrument sets it for the session in progress.
+     If the session is paused, the tap resumes its timer; detected playing then keeps
+     it running as usual.
    - **Learning:** the board adapts its cello and piano profiles to *your* instruments and
      room.
      - It learns most from your corrections.
@@ -58,12 +61,32 @@ You don't need to touch it at all.
 
 ## Screen and goals
 
-The top-right badge shows the live model confidence as a percentage once the
-current session has enough note evidence; `--%` means no fresh score is
-available. The Goals screen lets you set separate Cello and Piano targets in
-5-minute steps (5–240 minutes). They are stored on the board. The weekly chart
-scales each instrument's bars to its own goal, with days at or above goal shown
-at full height.
+The touchscreen has four pages: Piano, Cello, Diagnostics, and Goals. Swipe
+horizontally to move between pages; the small footer text shows the available
+directions. When practice is detected, the screen follows the detected
+instrument, except that Diagnostics stays open. Tap Piano or Cello on
+Diagnostics to label a running session or correct the most recent session;
+Preview explicitly opens the current estimated instrument page.
+
+The Piano and Cello pages show that instrument's daily time, goal progress, and
+Monday-to-Sunday practice bars, with shaded tracks for empty days and today's
+bar highlighted as the timer runs. The Goals page lets you set independent targets
+in 5-minute steps (5–240 minutes); values are stored on the board. Diagnostics
+shows the available microphone level, noise floor, sensitivity, classifier
+evidence, and network status.
+
+The Wi-Fi button on Diagnostics opens an on-screen setup form and keyboard.
+SSID and password are saved in local NVS and used to connect after reboot; the
+password is masked while editing. ESP-IDF `menuconfig` credentials remain an
+optional build-time fallback. When connected, the board serves the practice log
+at its IP address.
+
+Preview images for the four pages and Wi-Fi form are in `docs/ui-preview.png`
+and `docs/wifi-setup-preview.png`. They illustrate the layout; live values vary.
+
+After five minutes with no touch and no active session, the backlight turns off;
+touching the screen wakes it while audio monitoring continues. The weekly bars
+scale to each instrument's goal and fill at 100% when the goal is met.
 
 ## Build & flash
 
@@ -72,7 +95,7 @@ Requires ESP-IDF 5.3 or newer. It was built and tested with v5.4.2.
 ```bash
 cd practice_logger
 idf.py set-target esp32s3
-idf.py menuconfig          # Practice Logger -> Wi-Fi SSID / password, goal, time zone
+idf.py menuconfig          # Practice Logger -> optional Wi-Fi fallback, goal, time zone
 idf.py -p /dev/ttyACM0 flash monitor     # macOS: /dev/cu.usbmodem*
 ```
 
@@ -147,10 +170,11 @@ confirm or correct the label on the screen afterwards.
 ## Known limits
 
 - Recorded music, such as a cello recording on a speaker, looks like live playing. Mute
-  playback or press **End**.
+  playback.
 - Very quiet, very sparse playing (long held rests, soft harmonics) may need a more
   sensitive setting.
 - Detection was tuned on synthetic signals. Real rooms differ, so expect to adjust
   **Sens.** once.
-- If you switch from cello to piano with less than 90 s of silence in between, that
-  becomes one session with one label. Press **End** between instruments, or pause briefly.
+- If you switch from cello to piano with less than 5 minutes of silence in between, that
+  becomes one session with one label. Leave enough silence for the current session to
+  stop before switching instruments.

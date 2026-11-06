@@ -17,6 +17,9 @@ static const char *TAG = "net";
 
 static volatile bool s_connected;
 static char s_ip[16];
+static char s_ssid[33];
+static char s_password[65];
+static bool s_wifi_ready;
 static httpd_handle_t s_httpd;
 
 bool net_connected(void)
@@ -27,6 +30,11 @@ bool net_connected(void)
 const char *net_ip(void)
 {
     return s_ip;
+}
+
+const char *net_ssid(void)
+{
+    return s_ssid;
 }
 
 /* ---------- HTTP ---------- */
@@ -104,12 +112,13 @@ static void http_start(void)
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
+    (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (s_ssid[0]) esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
         s_ip[0] = '\0';
-        esp_wifi_connect();   /* keep retrying; the logger works offline meanwhile */
+        if (s_ssid[0]) esp_wifi_connect(); /* retry; logging still works offline */
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
@@ -117,6 +126,37 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGI(TAG, "connected, ip %s", s_ip);
         http_start();
     }
+}
+
+static void make_wifi_config(wifi_config_t *wc)
+{
+    memset(wc, 0, sizeof(*wc));
+    memcpy(wc->sta.ssid, s_ssid, strlen(s_ssid));
+    memcpy(wc->sta.password, s_password, strlen(s_password));
+    wc->sta.threshold.authmode = s_password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+}
+
+esp_err_t net_set_wifi_credentials(const char *ssid, const char *password)
+{
+    if (!ssid || !password || !ssid[0] || strlen(ssid) > 32 || strlen(password) > 64 ||
+        (password[0] && strlen(password) < 8)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_wifi_ready) return ESP_ERR_INVALID_STATE;
+
+    esp_err_t err = store_set_string_setting("wifi_ssid", ssid);
+    if (err != ESP_OK) return err;
+    err = store_set_string_setting("wifi_pass", password);
+    if (err != ESP_OK) return err;
+
+    strlcpy(s_ssid, ssid, sizeof(s_ssid));
+    strlcpy(s_password, password, sizeof(s_password));
+    wifi_config_t wc;
+    make_wifi_config(&wc);
+    (void)esp_wifi_disconnect();
+    err = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (err != ESP_OK) return err;
+    return esp_wifi_connect();
 }
 
 static void on_time_sync(struct timeval *tv)
@@ -129,9 +169,11 @@ void net_start(void)
     setenv("TZ", CONFIG_PL_TIMEZONE, 1);
     tzset();
 
-    if (strlen(CONFIG_PL_WIFI_SSID) == 0) {
-        ESP_LOGW(TAG, "no Wi-Fi configured (idf.py menuconfig -> Practice Logger)");
-        return;
+    if (store_get_string_setting("wifi_ssid", s_ssid, sizeof(s_ssid)) != ESP_OK || !s_ssid[0]) {
+        strlcpy(s_ssid, CONFIG_PL_WIFI_SSID, sizeof(s_ssid));
+        strlcpy(s_password, CONFIG_PL_WIFI_PASSWORD, sizeof(s_password));
+    } else if (store_get_string_setting("wifi_pass", s_password, sizeof(s_password)) != ESP_OK) {
+        s_password[0] = '\0';
     }
 
     ESP_ERROR_CHECK(esp_netif_init());
@@ -143,14 +185,17 @@ void net_start(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL, NULL));
 
-    wifi_config_t wc = { 0 };
-    strlcpy((char *)wc.sta.ssid, CONFIG_PL_WIFI_SSID, sizeof(wc.sta.ssid));
-    strlcpy((char *)wc.sta.password, CONFIG_PL_WIFI_PASSWORD, sizeof(wc.sta.password));
-    wc.sta.threshold.authmode = strlen(CONFIG_PL_WIFI_PASSWORD) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    if (s_ssid[0]) {
+        wifi_config_t wc;
+        make_wifi_config(&wc);
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    }
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
     ESP_ERROR_CHECK(esp_wifi_start());
+    s_wifi_ready = true;
+
+    if (!s_ssid[0]) ESP_LOGW(TAG, "no Wi-Fi configured; enter credentials on Diagnostics");
 
     esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     sntp.sync_cb = on_time_sync;

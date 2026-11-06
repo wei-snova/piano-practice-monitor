@@ -46,5 +46,8 @@ uint32_t store_version(void);
 /* Settings */
 int  store_get_setting(const char *key, int def);
 void store_set_setting(const char *key, int value);
+/* Persistent NVS strings, used for credentials entered on the device. */
+esp_err_t store_get_string_setting(const char *key, char *value, size_t value_size);
+esp_err_t store_set_string_setting(const char *key, const char *value);
 
 #define STORE_CSV_PATH "/spiffs/sessions.csv"

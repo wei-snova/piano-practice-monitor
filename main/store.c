@@ -321,6 +321,27 @@ void store_set_setting(const char *key, int value)
     nvs_commit(s_nvs);
 }
 
+esp_err_t store_get_string_setting(const char *key, char *value, size_t value_size)
+{
+    if (!key || !value || value_size == 0) return ESP_ERR_INVALID_ARG;
+    value[0] = '\0';
+    size_t needed = value_size;
+    esp_err_t err = nvs_get_str(s_nvs, key, value, &needed);
+    if (err == ESP_OK && needed > value_size) {
+        value[0] = '\0';
+        return ESP_ERR_NVS_INVALID_LENGTH;
+    }
+    return err;
+}
+
+esp_err_t store_set_string_setting(const char *key, const char *value)
+{
+    if (!key || !value) return ESP_ERR_INVALID_ARG;
+    esp_err_t err = nvs_set_str(s_nvs, key, value);
+    if (err != ESP_OK) return err;
+    return nvs_commit(s_nvs);
+}
+
 esp_err_t store_init(void)
 {
     esp_err_t err = nvs_flash_init();
