@@ -210,6 +210,7 @@ static void audio_task(void *arg)
     int selected_mic = 0;
     int64_t last_ckpt = 0;
     int log_div = 0;
+    int diag_logged_notes[2] = { 0, 0 };
     bool pause_reported = false;
     const int64_t correct_window_ms = CONFIG_PL_CORRECT_WINDOW_MIN * 60 * 1000LL;
 
@@ -338,6 +339,24 @@ static void audio_task(void *arg)
         }
 
         int classifier_mic = choose_classifier_channel(cls);
+
+        /* Keep classifier diagnostics useful even when a short practice is
+         * discarded by the one-minute session minimum. */
+        for (int i = 0; i < 2; i++) {
+            if (cls[i].n_notes >= diag_logged_notes[i] + 8) {
+                diag_logged_notes[i] = cls[i].n_notes;
+                ESP_LOGI(TAG, "classifier live M%d notes=%d bowed=%d logit=%.2f p=%.2f; "
+                         "slope %.1f/%d darken %.1f/%d vibrato %.1f/%d",
+                         i + 1, cls[i].n_notes, cls[i].n_bowed, cls[i].logit_audio,
+                         cls_p_piano(&cls[i], &model, session_hour),
+                         cls[i].feat_n[F_SLOPE] ? cls[i].feat_sum[F_SLOPE] / cls[i].feat_n[F_SLOPE] : 0.0f,
+                         cls[i].feat_n[F_SLOPE],
+                         cls[i].feat_n[F_DARKEN] ? cls[i].feat_sum[F_DARKEN] / cls[i].feat_n[F_DARKEN] : 0.0f,
+                         cls[i].feat_n[F_DARKEN],
+                         cls[i].feat_n[F_VIBRATO] ? cls[i].feat_sum[F_VIBRATO] / cls[i].feat_n[F_VIBRATO] : 0.0f,
+                         cls[i].feat_n[F_VIBRATO]);
+            }
+        }
 
         switch (ev) {
         case SEV_STARTED: {
