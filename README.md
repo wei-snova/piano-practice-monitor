@@ -2,7 +2,8 @@
 
 Fully automatic cello/piano practice time logging for the **Waveshare ESP32-S3-Touch-LCD-4B**.
 
-Leave it somewhere it can hear both instruments. It listens through the onboard mic.
+Leave it somewhere it can hear both instruments. It listens through both onboard
+microphones and follows the channel with the clearer musical signal.
 
 - It starts a session when you play and ends it when you stop.
 - It works out whether you were playing **cello or piano** by itself.

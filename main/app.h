@@ -36,6 +36,11 @@ typedef struct {
     float sens_db;
     float activity;
     bool active;
+    float mic_level_db[2];
+    float mic_floor_db[2];
+    float mic_activity[2];
+    bool mic_active[2];
+    int selected_mic;
 } live_state_t;
 
 void app_get_live(live_state_t *out);

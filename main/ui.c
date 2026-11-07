@@ -72,8 +72,9 @@ static const char *const s_instr_name[INSTR_COUNT] = { "Cello", "Piano" };
 
 static lv_obj_t *s_page[PAGE_COUNT];
 static practice_widgets_t s_practice[INSTR_COUNT];
-static lv_obj_t *s_diag_classifier, *s_diag_time, *s_diag_mic;
-static lv_obj_t *s_diag_mic_bar, *s_diag_sens_slider, *s_diag_activity, *s_diag_model, *s_diag_wifi;
+static lv_obj_t *s_diag_classifier, *s_diag_time;
+static lv_obj_t *s_diag_mic[2], *s_diag_mic_bar[2];
+static lv_obj_t *s_diag_sens_slider, *s_diag_activity, *s_diag_model, *s_diag_wifi;
 static lv_obj_t *s_diag_hint;
 static lv_obj_t *s_wifi_dialog, *s_wifi_ssid, *s_wifi_password, *s_wifi_keyboard, *s_wifi_status;
 static bool s_wifi_connect_pending;
@@ -636,19 +637,24 @@ static void create_diagnostics_page(float sensitivity_db)
     s_diag_time = line_label(recognition, 16, 42, 408, COL_DIM, "Clock not synced");
 
     lv_obj_t *mic = card(root, 20, 134, 440, 124);
-    s_diag_mic = line_label(mic, 16, 12, 408, COL_TEXT, "Mic -- dBFS");
-    s_diag_mic_bar = lv_bar_create(mic);
-    lv_obj_set_size(s_diag_mic_bar, 408, 10);
-    lv_obj_set_pos(s_diag_mic_bar, 16, 36);
-    lv_bar_set_range(s_diag_mic_bar, 0, 40);
-    lv_obj_set_style_bg_color(s_diag_mic_bar, COL_BAR_TRACK, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_diag_mic_bar, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s_diag_mic_bar, COL_PIANO_STRONG, LV_PART_INDICATOR);
-    allow_gesture_bubble(s_diag_mic_bar);
+    for (int i = 0; i < 2; i++) {
+        int y = 8 + i * 37;
+        char initial[24];
+        snprintf(initial, sizeof(initial), "Mic %d -- dBFS", i + 1);
+        s_diag_mic[i] = line_label(mic, 16, y, 408, COL_TEXT, initial);
+        s_diag_mic_bar[i] = lv_bar_create(mic);
+        lv_obj_set_size(s_diag_mic_bar[i], 408, 8);
+        lv_obj_set_pos(s_diag_mic_bar[i], 16, y + 21);
+        lv_bar_set_range(s_diag_mic_bar[i], 0, 40);
+        lv_obj_set_style_bg_color(s_diag_mic_bar[i], COL_BAR_TRACK, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(s_diag_mic_bar[i], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(s_diag_mic_bar[i], COL_PIANO_STRONG, LV_PART_INDICATOR);
+        allow_gesture_bubble(s_diag_mic_bar[i]);
+    }
 
-    s_diag_activity = line_label(mic, 16, 56, 408, COL_DIM, "LISTENING");
+    s_diag_activity = line_label(mic, 16, 83, 408, COL_DIM, "LISTENING");
     lv_obj_t *sensitivity = label(mic, &lv_font_montserrat_14, COL_DIM, "Sensitivity");
-    lv_obj_set_pos(sensitivity, 16, 90);
+    lv_obj_set_pos(sensitivity, 16, 103);
     s_diag_sens_slider = lv_slider_create(mic);
     lv_obj_set_size(s_diag_sens_slider, 296, 10);
     lv_slider_set_range(s_diag_sens_slider, 6, 30);
@@ -657,7 +663,7 @@ static void create_diagnostics_page(float sensitivity_db)
     if (slider_value > 30) slider_value = 30;
     lv_slider_set_value(s_diag_sens_slider, slider_value, LV_ANIM_OFF);
     lv_obj_set_ext_click_area(s_diag_sens_slider, 14);
-    lv_obj_set_pos(s_diag_sens_slider, 118, 94);
+    lv_obj_set_pos(s_diag_sens_slider, 118, 107);
     lv_obj_set_style_bg_color(s_diag_sens_slider, COL_BAR_TRACK, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_diag_sens_slider, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_bg_color(s_diag_sens_slider, COL_PIANO_STRONG, LV_PART_INDICATOR);
@@ -835,26 +841,27 @@ static void update_diagnostics(const live_state_t *live, time_t now)
     }
     lv_label_set_text(s_diag_time, text);
 
-    snprintf(text, sizeof(text), "Mic %.1f dBFS" DOT "floor %.1f" DOT "sens. %.1f dB",
-             live->level_db, live->floor_db, live->sens_db);
-    lv_label_set_text(s_diag_mic, text);
+    for (int i = 0; i < 2; i++) {
+        snprintf(text, sizeof(text), "Mic %d %.1f dBFS" DOT "floor %.1f",
+                 i + 1, live->mic_level_db[i], live->mic_floor_db[i]);
+        lv_label_set_text(s_diag_mic[i], text);
+        float above = live->mic_level_db[i] - live->mic_floor_db[i];
+        if (above < 0) above = 0;
+        if (above > 40) above = 40;
+        lv_bar_set_value(s_diag_mic_bar[i], (int32_t)above, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(s_diag_mic_bar[i], live->mic_active[i] ? COL_GREEN : COL_PIANO_STRONG,
+                                  LV_PART_INDICATOR);
+    }
     int slider_value = 36 - (int)(live->sens_db + 0.5f);
     if (slider_value < 6) slider_value = 6;
     if (slider_value > 30) slider_value = 30;
     if (!lv_obj_has_state(s_diag_sens_slider, LV_STATE_PRESSED)) {
         lv_slider_set_value(s_diag_sens_slider, slider_value, LV_ANIM_OFF);
     }
-    float above = live->level_db - live->floor_db;
-    if (above < 0) above = 0;
-    if (above > 40) above = 40;
-    lv_bar_set_value(s_diag_mic_bar, (int32_t)above, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(s_diag_mic_bar, live->active ? COL_GREEN : COL_PIANO_STRONG,
-                              LV_PART_INDICATOR);
-
     const char *state = live->state == SS_PRACTICING ? "PRACTICING" :
                         live->state == SS_CANDIDATE ? "CONFIRMING" : "LISTENING";
-    snprintf(text, sizeof(text), "%s" DOT "activity %.2f" DOT "%d notes",
-             state, live->activity, live->n_notes);
+    snprintf(text, sizeof(text), "%s" DOT "M1 %.2f / M2 %.2f" DOT "%d notes",
+             state, live->mic_activity[0], live->mic_activity[1], live->n_notes);
     lv_label_set_text(s_diag_activity, text);
     lv_label_set_text(s_diag_model, "Adaptive profiles are stored in local board flash");
 

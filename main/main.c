@@ -149,7 +149,7 @@ static void audio_task(void *arg)
     }
     esp_codec_dev_sample_info_t fmt = {
         .sample_rate = MIC_RATE,
-        .channel = 1,
+        .channel = 2,
         .bits_per_sample = 16,
     };
     if (esp_codec_dev_open(mic, &fmt) != ESP_CODEC_DEV_OK) {
@@ -162,8 +162,9 @@ static void audio_task(void *arg)
     det_params_t dp;
     det_default_params(&dp);
     dp.sens_db = (float)store_get_setting("sens", 15);
-    static detector_t det;
-    det_init(&det, &dp);
+    static detector_t det[2];
+    det_init(&det[0], &dp);
+    det_init(&det[1], &dp);
 
     sess_params_t sp = {
         .start_hold_ms = CONFIG_PL_START_HOLD_S * 1000LL,
@@ -186,9 +187,13 @@ static void audio_task(void *arg)
     instrument_t label = INSTR_CELLO;
     float confidence = 0.5f;
 
-    static int16_t pcm[MIC_HOP];
-    static float hop[DET_HOP];
-    float dec_state = 0;
+    static int16_t pcm[MIC_HOP * 2];
+    static int16_t mono[2][MIC_HOP];
+    static float hop[2][DET_HOP];
+    float dec_state[2] = { 0, 0 };
+    float snr_ema[2] = { 0, 0 };
+    bool snr_ema_init = false;
+    int selected_mic = 0;
     int64_t last_ckpt = 0;
     int log_div = 0;
     bool pause_reported = false;
@@ -201,9 +206,33 @@ static void audio_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
-        det_decimate_16k(pcm, MIC_HOP, hop, &dec_state);
-        det_out_t o;
-        det_push(&det, hop, &o);
+        for (int i = 0; i < MIC_HOP; i++) {
+            mono[0][i] = pcm[i * 2];
+            mono[1][i] = pcm[i * 2 + 1];
+        }
+        det_out_t mic_o[2];
+        for (int i = 0; i < 2; i++) {
+            det_decimate_16k(mono[i], MIC_HOP, hop[i], &dec_state[i]);
+            det_push(&det[i], hop[i], &mic_o[i]);
+            float snr = mic_o[i].level_db - mic_o[i].floor_db;
+            if (!snr_ema_init) snr_ema[i] = snr;
+            else snr_ema[i] += 0.04f * (snr - snr_ema[i]);
+        }
+        snr_ema_init = true;
+
+        /* Prefer a channel that currently detects music; otherwise choose the
+         * channel with the stronger smoothed signal-to-floor ratio. */
+        if (mic_o[0].active != mic_o[1].active) {
+            selected_mic = mic_o[0].active ? 0 : 1;
+        } else if (mic_o[0].musical != mic_o[1].musical) {
+            selected_mic = mic_o[0].musical ? 0 : 1;
+        } else if (snr_ema[1 - selected_mic] > snr_ema[selected_mic] + 2.0f) {
+            selected_mic = 1 - selected_mic;
+        }
+        det_out_t o = mic_o[selected_mic];
+        bool music_active = mic_o[0].active || mic_o[1].active;
+        if (mic_o[1].activity > o.activity) o.activity = mic_o[1].activity;
+        o.active = music_active;
         int64_t t = now_ms();
 
         /* current label of the running session */
@@ -247,7 +276,8 @@ static void audio_task(void *arg)
                 force_end = true;
                 break;
             case CMD_SET_SENSITIVITY:
-                det_set_sensitivity(&det, (float)c.value);
+                det_set_sensitivity(&det[0], (float)c.value);
+                det_set_sensitivity(&det[1], (float)c.value);
                 store_set_setting("sens", c.value);
                 break;
             case CMD_SET_GOAL: {
@@ -268,13 +298,15 @@ static void audio_task(void *arg)
         sess_event_t ev = force_end ? session_force_end(&sess, &dur)
                                     : session_update(&sess, o.active, t, &dur);
 
-        if (sess.state == SS_PRACTICING && o.active) {
+        if (sess.state == SS_PRACTICING && music_active) {
             pause_reported = false;
         } else if (sess.state == SS_PRACTICING && !pause_reported &&
                    t - sess.last_active >= 10000) {
-            ESP_LOGW(TAG, "no music activity detected for 10s: level %.1f dB, floor %.1f dB, "
-                     "activity %.2f, sensitivity %.1f dB",
-                     o.level_db, o.floor_db, o.activity, det.p.sens_db);
+            ESP_LOGW(TAG, "no music activity for 10s: mic1 %.1f/%.1f act %.2f, "
+                     "mic2 %.1f/%.1f act %.2f, sensitivity %.1f dB",
+                     mic_o[0].level_db, mic_o[0].floor_db, mic_o[0].activity,
+                     mic_o[1].level_db, mic_o[1].floor_db, mic_o[1].activity,
+                     det[selected_mic].p.sens_db);
             pause_reported = true;
         } else if (sess.state == SS_IDLE) {
             pause_reported = false;
@@ -306,6 +338,9 @@ static void audio_task(void *arg)
         case SEV_ENDED: {
             instrument_t final_label = override_set ? override_instr
                                               : cls_decide(&cls, &model, session_hour, &confidence);
+            ESP_LOGI(TAG, "classifier evidence: notes=%d bowed=%d audio_logit=%.2f p(piano)=%.2f",
+                     cls.n_notes, cls.n_bowed, cls.logit_audio,
+                     cls_p_piano(&cls, &model, session_hour));
             ESP_LOGI(TAG, "session ended: %.1f min of %s (%s, %d notes, confidence %.2f)", dur / 60000.0,
                      INSTR_NAMES[final_label], override_set ? "set by user" : "auto", cls.n_notes, confidence);
             store_commit_session(start_wall, (uint32_t)(dur / 1000), final_label);
@@ -349,9 +384,14 @@ static void audio_task(void *arg)
             .last_corrected = pending.by_user,
             .level_db = o.level_db,
             .floor_db = o.floor_db,
-            .sens_db = det.p.sens_db,
+            .sens_db = det[selected_mic].p.sens_db,
             .activity = o.activity,
-            .active = o.active,
+            .active = music_active,
+            .mic_level_db = { mic_o[0].level_db, mic_o[1].level_db },
+            .mic_floor_db = { mic_o[0].floor_db, mic_o[1].floor_db },
+            .mic_activity = { mic_o[0].activity, mic_o[1].activity },
+            .mic_active = { mic_o[0].active, mic_o[1].active },
+            .selected_mic = selected_mic,
         };
         publish_live(&L);
 
