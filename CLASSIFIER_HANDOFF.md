@@ -7,13 +7,38 @@ It is written for whoever improves it next. Every number here matches the code i
 
 ## Status in one paragraph
 
-The classifier is a small, hand-designed model in plain C (no ML framework). It measures a
-few physical properties of each note and compares them with two learned instrument
-profiles. It has been tested **only on synthetic audio** (see [Testing](#testing)). It has
-**not** been validated on a real cello and piano. `AGENTS.md` notes that the family's board
-was running a different firmware (`piano_monitor` v0.1.1) as of 2026-11-04, so field
-observations from that board are not evidence about this code. Real recordings are the most
-valuable next step.
+Each note's vote now comes mostly from a **note-shape model** fitted to real recordings (see
+[Note-shape model](#note-shape-model)), which replaced whole-note slope as the main evidence.
+It has passed one cello session and one piano session on the real board (2026-11-06), but
+has not been fitted to this board's mics or room. Sections below that describe the
+per-note vote, the learning table and the board status predate this and may be stale.
+
+## Note-shape model
+
+Whole-note slope mistook the fade at the end of a bow stroke for piano decay. On a real
+71-note cello session, slope averaged -18 dB/s and the audio score was +35 to +43 (piano).
+The next session had a similar slope but scored -46 to -50 (cello) with this model.
+
+- **Measures** (`note_shape` in `classifier.c`, first ~0.4 s after the level peak): slope,
+  level deviation, pitch deviation, brightness slope, pitch-corrected brightness, rise, peak
+  time, log2 f0. Peak time is the strongest cue: about 0.16 s bowed, 0.03 s struck.
+- **Vote:** `NS_MIX` (0.6) of the vote is the note shape, the rest is the learned profiles,
+  so user corrections still have an effect. Later segments of a long note use only the
+  profile share, because a fading piano can look like anything.
+- **Training data:** University of Iowa MIS (bowed cello, plucked cello, piano), TinySOL
+  cello (CC BY 4.0), Salamander Grand Piano by Alexander Holm (CC BY 3.0), VCSL Knight
+  upright (CC0). Stored in `~/Work/instrument-samples/`, outside this repo, with the fitting
+  scripts in `fit-scripts/` there. VCSL upright note names are one octave low.
+- **Fit:** logistic regression, each source weighted equally, cello weighted x2, on notes as
+  `cls_push` segments them. Features were clips plus stitched sequences with simulated room
+  and fades. `NS_BIAS` was then raised by 0.3 so all regression tests pass.
+- **Rejected:** harmonicity separated the sets but is close to 1 for both and falls with
+  noise, so a noisy room would push cello toward piano.
+
+Limits: session scores used the training libraries, so they are optimistic. A model that
+never saw Iowa's sharp bow attacks got only 15-65% of those notes right, so a cello unlike
+both sources may still fail. Plucked notes read as piano. Low upright notes are the weakest
+piano case. The next step is fitting to raw recordings from this board.
 
 ## Constraints that shaped the design
 

@@ -39,7 +39,7 @@
  * session gets one label.
  *
  * The two instrument profiles start from physical defaults and adapt to your
- * own instruments and room after confident or user-corrected sessions.
+ * own instruments and room after user-labelled sessions.
  */
 #pragma once
 
