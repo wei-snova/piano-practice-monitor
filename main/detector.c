@@ -4,6 +4,7 @@
 #include <string.h>
 
 #define YIN_THRESHOLD   0.15f
+#define YIN_MARGIN      0.12f   /* a dip this close to the deepest one still counts */
 #define FLOOR_DOWN_RATE 0.2f    /* fraction per hop toward a quieter level  */
 #define FLOOR_UP_DB     0.03f   /* dB per hop (~1 dB/s) on non-harmonic hops */
 #define FLOOR_INIT_DB  -70.0f   /* start low so booting mid-practice still works */
@@ -67,23 +68,28 @@ static float yin(const float *x, float *f0_out)
         cmnd[tau] = (running > 0.0f) ? s * (float)tau / running : 1.0f;
     }
 
-    int best = -1;
+    /* Take the first dip close to the deepest one. A fixed threshold alone lets
+     * a true dip that just misses it lose to a much later, wrong one, which
+     * reads as a sudden low pitch and splits the note. */
+    float deepest = cmnd[DET_TAU_MIN];
+    for (int tau = DET_TAU_MIN + 1; tau <= DET_TAU_MAX; tau++) {
+        if (cmnd[tau] < deepest) {
+            deepest = cmnd[tau];
+        }
+    }
+    float accept = deepest + YIN_MARGIN;
+    if (accept < YIN_THRESHOLD) {
+        accept = YIN_THRESHOLD;
+    }
+
+    int best = DET_TAU_MIN;
     for (int tau = DET_TAU_MIN; tau <= DET_TAU_MAX; tau++) {
-        if (cmnd[tau] < YIN_THRESHOLD) {
+        if (cmnd[tau] < accept) {
             while (tau + 1 <= DET_TAU_MAX && cmnd[tau + 1] < cmnd[tau]) {
                 tau++;
             }
             best = tau;
             break;
-        }
-    }
-    if (best < 0) {
-        /* no dip under threshold: take the global minimum */
-        best = DET_TAU_MIN;
-        for (int tau = DET_TAU_MIN + 1; tau <= DET_TAU_MAX; tau++) {
-            if (cmnd[tau] < cmnd[best]) {
-                best = tau;
-            }
         }
     }
 
@@ -101,7 +107,7 @@ static float yin(const float *x, float *f0_out)
     }
 
     *f0_out = (float)DET_FS / tau_f;
-    float h = 1.0f - cmnd[best];
+    float h = 1.0f - deepest;
     if (h < 0.0f) {
         h = 0.0f;
     }
