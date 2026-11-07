@@ -9,6 +9,9 @@ This file carries the important context from the related ChatGPT/Codex conversat
 - Instrument classification is an adaptive, hand-engineered audio-feature model (not TinyML). It uses per-note cues such as decay, timbre change, attack, and vibrato. User confirmation/correction taps during or after a session feed learning. Real instrument performance should be assessed on the family's board; README's test claims are based on synthetic signals.
 - Current UI changes include per-instrument configurable goals (default 30 minutes each, saved on board), weekly progress bars scaled to each goal, and a confidence percentage badge.
 
+For how the cello/piano classifier works, its learning rule, tests and known weaknesses, see
+[`CLASSIFIER_HANDOFF.md`](CLASSIFIER_HANDOFF.md).
+
 ## Decisions from the conversation
 
 - Keep improving and deploying the adaptive classifier instead of replacing it with TinyML for now; preserve the ability to add cello samples/training later.
