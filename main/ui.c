@@ -74,7 +74,7 @@ static lv_obj_t *s_page[PAGE_COUNT];
 static practice_widgets_t s_practice[INSTR_COUNT];
 static lv_obj_t *s_diag_classifier, *s_diag_time;
 static lv_obj_t *s_diag_mic[2], *s_diag_mic_bar[2];
-static lv_obj_t *s_diag_sens_slider, *s_diag_activity, *s_diag_model, *s_diag_wifi;
+static lv_obj_t *s_diag_sens_slider, *s_diag_sens_value, *s_diag_activity, *s_diag_model, *s_diag_wifi;
 static lv_obj_t *s_diag_hint;
 static lv_obj_t *s_wifi_dialog, *s_wifi_ssid, *s_wifi_password, *s_wifi_keyboard, *s_wifi_status;
 static bool s_wifi_connect_pending;
@@ -653,8 +653,8 @@ static void create_diagnostics_page(float sensitivity_db)
     }
 
     s_diag_activity = line_label(mic, 16, 83, 408, COL_DIM, "LISTENING");
-    lv_obj_t *sensitivity = label(mic, &lv_font_montserrat_14, COL_DIM, "Sensitivity");
-    lv_obj_set_pos(sensitivity, 16, 103);
+    s_diag_sens_value = label(mic, &lv_font_montserrat_14, COL_DIM, "Sens. -- dB");
+    lv_obj_set_pos(s_diag_sens_value, 16, 103);
     s_diag_sens_slider = lv_slider_create(mic);
     lv_obj_set_size(s_diag_sens_slider, 296, 10);
     lv_slider_set_range(s_diag_sens_slider, 6, 30);
@@ -855,9 +855,12 @@ static void update_diagnostics(const live_state_t *live, time_t now)
     int slider_value = 36 - (int)(live->sens_db + 0.5f);
     if (slider_value < 6) slider_value = 6;
     if (slider_value > 30) slider_value = 30;
-    if (!lv_obj_has_state(s_diag_sens_slider, LV_STATE_PRESSED)) {
+    if (lv_obj_has_state(s_diag_sens_slider, LV_STATE_PRESSED)) {
+        slider_value = lv_slider_get_value(s_diag_sens_slider);
+    } else {
         lv_slider_set_value(s_diag_sens_slider, slider_value, LV_ANIM_OFF);
     }
+    lv_label_set_text_fmt(s_diag_sens_value, "Sens. %d dB", 36 - slider_value);
     const char *state = live->state == SS_PRACTICING ? "PRACTICING" :
                         live->state == SS_CANDIDATE ? "CONFIRMING" : "LISTENING";
     snprintf(text, sizeof(text), "%s" DOT "M1 %.2f / M2 %.2f" DOT "%d notes",
