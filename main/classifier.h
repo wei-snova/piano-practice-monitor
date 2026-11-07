@@ -29,7 +29,11 @@
  * for cello. Without this, tuning at the start of a cello session reads as
  * piano for a long time.
  *
- * Each note votes for the closer instrument profile, the votes add up over
+ * A note's vote comes mostly from a model of how its opening sounds (how fast
+ * it reaches its peak, how it holds, pitch wobble, tone colour); see classifier.c.
+ * The rest comes from the closer of two learned instrument profiles.
+ *
+ * The votes add up over
  * the session, and a weak time-of-day prior (when you usually practise each
  * instrument) breaks ties. Because you never play both at once, the whole
  * session gets one label.
@@ -74,6 +78,7 @@ typedef struct {
     float f0[CLS_NOTE_MAX];
     float br[CLS_NOTE_MAX];
     bool  br_ok[CLS_NOTE_MAX];         /* far enough above the noise to trust br */
+    bool  continued;                   /* later segment of a long note, not its onset */
     float ref_f0;
     float pre_lv[3];
     int   pre_idx;

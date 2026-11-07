@@ -35,6 +35,25 @@
 #define TIME_PRIOR_CAP   1.5f
 #define MIN_VALID_NOTES  5          /* per feature, for the session mean to be trusted */
 
+/* Note-shape model: a logistic model over how a note starts and sounds. > 0
+ * favours piano. Only a note's opening votes: late in a long note, a fading
+ * piano can look like anything. Fitted offline to single notes from the
+ * University of Iowa MIS, TinySOL (CC BY 4.0), Salamander Grand Piano by
+ * Alexander Holm (CC BY 3.0) and VCSL (CC0), not yet to this board's mics. */
+#define NS_MIN_HOPS   6
+#define NS_PEAK_HOPS  8          /* the level peak is looked for this early */
+#define NS_BODY_HOPS  13         /* ~0.4 s after the peak */
+#define NS_MAX_VOTE   1.5f
+#define NS_MIX        0.6f       /* share of the vote; the rest adapts to corrections */
+#define NS_MAX_WOBBLE 60.0f      /* cents */
+#define NS_OUTLIER    150.0f     /* cents: not this note's pitch */
+enum { NS_SLOPE, NS_LEVEL_DEV, NS_PITCH_DEV, NS_BRIGHT_SLOPE, NS_BRIGHT, NS_RISE,
+       NS_PEAK_TIME, NS_LOG_F0, NS_COUNT };
+static const float NS_WEIGHT[NS_COUNT] = {
+    -0.0226f, -0.4306f, -0.3422f, 0.0033f, -0.0980f, -0.0628f, -14.1914f, 0.9713f,
+};
+static const float NS_BIAS = -6.4288f;
+
 /* typical spread, weight, and clamp range of each feature.
  *                                       slope   darken  attack  pitch  vibrato */
 static const float SCALE[CLS_NFEAT]  = { 6.0f,   3.0f,   4.0f,   1.0f,  1.0f  };
@@ -190,6 +209,87 @@ float cls_note_logit(const cls_model_t *m, const float feat[CLS_NFEAT], const bo
     return clampf(logit, -NOTE_VOTE_CAP, NOTE_VOTE_CAP);
 }
 
+/* standard deviation of y[a..b) around its best-fit line */
+static float line_dev(const float *y, int a, int b)
+{
+    int n = b - a;
+    float sl = slope_of(y, a, b);
+    float my = 0, mx = 0;
+    for (int i = a; i < b; i++) {
+        my += y[i];
+        mx += (float)i;
+    }
+    my /= n;
+    mx /= n;
+    float e = 0;
+    for (int i = a; i < b; i++) {
+        float r = y[i] - my - sl * ((float)i - mx);
+        e += r * r;
+    }
+    return sqrtf(e / n);
+}
+
+/* Measures the opening of the current note. Returns false if it is too short. */
+static bool note_shape(const cls_session_t *s, float x[NS_COUNT])
+{
+    int n = s->len;
+    if (n < NS_MIN_HOPS) {
+        return false;
+    }
+    int peak = 0;
+    for (int i = 1; i < n && i < NS_PEAK_HOPS; i++) {
+        if (s->lv[i] > s->lv[peak]) {
+            peak = i;
+        }
+    }
+    int end = peak + NS_BODY_HOPS;
+    if (end > n - EDGE_HOPS) {
+        end = n - EDGE_HOPS;
+    }
+    if (end - peak < 4) {
+        end = n;
+    }
+    if (end - peak < 3) {
+        return false;
+    }
+
+    float f0 = median(s->f0, n);
+    float cents[CLS_NOTE_MAX];
+    int nc = 0;
+    int first = peak + 1 < end ? peak + 1 : peak;
+    for (int i = first; i < end; i++) {
+        float c = 1200.0f * log2f(s->f0[i] / f0);
+        c -= 1200.0f * roundf(c / 1200.0f);
+        if (fabsf(c) < NS_OUTLIER) {
+            cents[nc++] = c;
+        }
+    }
+    float bright = 0;
+    for (int i = peak; i < end; i++) {
+        bright += s->br[i];
+    }
+    bright /= (float)(end - peak);
+
+    x[NS_SLOPE] = slope_of(s->lv, peak, end) / HOP_S;
+    x[NS_LEVEL_DEV] = line_dev(s->lv, peak, end);
+    x[NS_PITCH_DEV] = nc >= 4 ? fminf(line_dev(cents, 0, nc), NS_MAX_WOBBLE) : 0.0f;
+    x[NS_BRIGHT_SLOPE] = slope_of(s->br, peak, end) / HOP_S;
+    x[NS_BRIGHT] = bright + 20.0f * log10f(f0 / 200.0f);
+    x[NS_RISE] = s->lv[peak] - s->lv[0];
+    x[NS_PEAK_TIME] = (float)peak * HOP_S;
+    x[NS_LOG_F0] = log2f(f0);
+    return true;
+}
+
+static float note_shape_vote(const float x[NS_COUNT])
+{
+    float v = NS_BIAS;
+    for (int i = 0; i < NS_COUNT; i++) {
+        v += NS_WEIGHT[i] * x[i];
+    }
+    return clampf(v, -NS_MAX_VOTE, NS_MAX_VOTE);
+}
+
 static void finish_note(cls_session_t *s, const cls_model_t *m)
 {
     int n = s->len;
@@ -258,7 +358,14 @@ static void finish_note(cls_session_t *s, const cls_model_t *m)
     }
     /* short notes are measured poorly: let long notes carry the decision */
     float w = clampf((float)(n - 4) / 12.0f, 0.25f, 1.0f);
-    s->logit_audio += w * cls_note_logit(m, feat, valid);
+    float shape[NS_COUNT];
+    float vote = cls_note_logit(m, feat, valid);
+    if (!s->continued && note_shape(s, shape)) {
+        vote = NS_MIX * note_shape_vote(shape) + (1.0f - NS_MIX) * vote;
+    } else {
+        vote *= 1.0f - NS_MIX;
+    }
+    s->logit_audio += w * vote;
     for (int f = 0; f < CLS_NFEAT; f++) {
         if (valid[f]) {
             s->feat_sum[f] += feat[f];
@@ -296,6 +403,7 @@ void cls_push(cls_session_t *s, const cls_model_t *m, const det_out_t *o)
             /* pitch moved: previous note ended, a new one starts here */
             finish_note(s, m);
             s->len = 0;
+            s->continued = false;
             f0 = o->f0;
         }
     }
@@ -326,10 +434,12 @@ void cls_push(cls_session_t *s, const cls_model_t *m, const det_out_t *o)
             /* very long note: score what we have and continue as a new segment */
             finish_note(s, m);
             s->len = 0;
+            s->continued = true;
         }
     } else if (s->len > 0) {
         finish_note(s, m);
         s->len = 0;
+        s->continued = false;
     }
 
     /* recent level history (includes the tail of the previous note, so the
