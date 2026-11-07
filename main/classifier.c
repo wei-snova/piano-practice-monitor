@@ -351,12 +351,18 @@ static float time_logit(const cls_model_t *m, int hour)
 float cls_p_piano(const cls_session_t *s, const cls_model_t *m, int hour)
 {
     float audio = s->logit_audio;
-    if (s->n_bowed >= BOWED_DECISIVE_N && (float)s->n_bowed >= BOWED_DECISIVE_FRAC * (float)s->n_notes &&
-        audio > BOWED_DECISIVE_LOGIT) {
+    if (cls_has_bowed_evidence(s)) {
         audio = BOWED_DECISIVE_LOGIT;
     }
     float logit = AUDIO_WEIGHT * audio + time_logit(m, hour);
     return 1.0f / (1.0f + expf(-logit));
+}
+
+bool cls_has_bowed_evidence(const cls_session_t *s)
+{
+    return s->n_bowed >= BOWED_DECISIVE_N && s->n_notes > 0 &&
+           (float)s->n_bowed >= BOWED_DECISIVE_FRAC * (float)s->n_notes &&
+           s->logit_audio > BOWED_DECISIVE_LOGIT;
 }
 
 instrument_t cls_decide(const cls_session_t *s, const cls_model_t *m, int hour, float *confidence)

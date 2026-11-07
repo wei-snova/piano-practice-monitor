@@ -95,6 +95,9 @@ void cls_reset(cls_session_t *s);
 /* Feed every detector hop (including silent ones). */
 void cls_push(cls_session_t *s, const cls_model_t *m, const det_out_t *o);
 
+/* True when a sufficient share of the session contains notes only a bow can make. */
+bool cls_has_bowed_evidence(const cls_session_t *s);
+
 /* Probability the session is piano. hour = local hour 0..23, or -1 if unknown. */
 float cls_p_piano(const cls_session_t *s, const cls_model_t *m, int hour);
 

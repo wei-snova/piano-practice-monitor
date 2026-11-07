@@ -137,6 +137,19 @@ static void apply_learning(pending_t *p, cls_model_t *model)
              p->by_user ? ", user label" : "");
 }
 
+static int choose_classifier_channel(const cls_session_t cls[2])
+{
+    bool bowed0 = cls_has_bowed_evidence(&cls[0]);
+    bool bowed1 = cls_has_bowed_evidence(&cls[1]);
+    if (bowed0 != bowed1) return bowed1 ? 1 : 0;
+    if (bowed0 && bowed1) {
+        float frac0 = (float)cls[0].n_bowed / (float)cls[0].n_notes;
+        float frac1 = (float)cls[1].n_bowed / (float)cls[1].n_notes;
+        if (frac0 != frac1) return frac1 > frac0 ? 1 : 0;
+    }
+    return cls[1].n_notes > cls[0].n_notes ? 1 : 0;
+}
+
 /* ---------- audio task ---------- */
 
 static void audio_task(void *arg)
@@ -177,8 +190,9 @@ static void audio_task(void *arg)
 
     static cls_model_t model;
     store_load_model(&model);
-    static cls_session_t cls;
-    cls_reset(&cls);
+    static cls_session_t cls[2];
+    cls_reset(&cls[0]);
+    cls_reset(&cls[1]);
     static pending_t pending;
 
     int session_hour = -1;
@@ -240,7 +254,8 @@ static void audio_task(void *arg)
             label = override_instr;
             confidence = 1.0f;
         } else {
-            label = cls_decide(&cls, &model, session_hour, &confidence);
+            int classifier_mic = choose_classifier_channel(cls);
+            label = cls_decide(&cls[classifier_mic], &model, session_hour, &confidence);
         }
 
         /* ---- UI commands ---- */
@@ -313,12 +328,16 @@ static void audio_task(void *arg)
         }
 
         if (before == SS_IDLE && sess.state == SS_CANDIDATE) {
-            cls_reset(&cls);                              /* fresh evidence per session */
+            cls_reset(&cls[0]);
+            cls_reset(&cls[1]);                           /* fresh evidence per session */
             override_set = false;
         }
         if (sess.state != SS_IDLE) {
-            cls_push(&cls, &model, &o);
+            cls_push(&cls[0], &model, &mic_o[0]);
+            cls_push(&cls[1], &model, &mic_o[1]);
         }
+
+        int classifier_mic = choose_classifier_channel(cls);
 
         switch (ev) {
         case SEV_STARTED: {
@@ -337,18 +356,36 @@ static void audio_task(void *arg)
         }
         case SEV_ENDED: {
             instrument_t final_label = override_set ? override_instr
-                                              : cls_decide(&cls, &model, session_hour, &confidence);
-            ESP_LOGI(TAG, "classifier evidence: notes=%d bowed=%d audio_logit=%.2f p(piano)=%.2f",
-                     cls.n_notes, cls.n_bowed, cls.logit_audio,
-                     cls_p_piano(&cls, &model, session_hour));
+                                              : cls_decide(&cls[classifier_mic], &model, session_hour, &confidence);
+            ESP_LOGI(TAG, "classifier evidence: M1 notes=%d bowed=%d logit=%.2f p=%.2f; "
+                     "M2 notes=%d bowed=%d logit=%.2f p=%.2f",
+                     cls[0].n_notes, cls[0].n_bowed, cls[0].logit_audio,
+                     cls_p_piano(&cls[0], &model, session_hour),
+                     cls[1].n_notes, cls[1].n_bowed, cls[1].logit_audio,
+                     cls_p_piano(&cls[1], &model, session_hour));
+            ESP_LOGI(TAG, "features: M1 slope %.1f/%d darken %.1f/%d vibrato %.1f/%d; "
+                     "M2 slope %.1f/%d darken %.1f/%d vibrato %.1f/%d",
+                     cls[0].feat_n[F_SLOPE] ? cls[0].feat_sum[F_SLOPE] / cls[0].feat_n[F_SLOPE] : 0.0f,
+                     cls[0].feat_n[F_SLOPE],
+                     cls[0].feat_n[F_DARKEN] ? cls[0].feat_sum[F_DARKEN] / cls[0].feat_n[F_DARKEN] : 0.0f,
+                     cls[0].feat_n[F_DARKEN],
+                     cls[0].feat_n[F_VIBRATO] ? cls[0].feat_sum[F_VIBRATO] / cls[0].feat_n[F_VIBRATO] : 0.0f,
+                     cls[0].feat_n[F_VIBRATO],
+                     cls[1].feat_n[F_SLOPE] ? cls[1].feat_sum[F_SLOPE] / cls[1].feat_n[F_SLOPE] : 0.0f,
+                     cls[1].feat_n[F_SLOPE],
+                     cls[1].feat_n[F_DARKEN] ? cls[1].feat_sum[F_DARKEN] / cls[1].feat_n[F_DARKEN] : 0.0f,
+                     cls[1].feat_n[F_DARKEN],
+                     cls[1].feat_n[F_VIBRATO] ? cls[1].feat_sum[F_VIBRATO] / cls[1].feat_n[F_VIBRATO] : 0.0f,
+                     cls[1].feat_n[F_VIBRATO]);
             ESP_LOGI(TAG, "session ended: %.1f min of %s (%s, %d notes, confidence %.2f)", dur / 60000.0,
-                     INSTR_NAMES[final_label], override_set ? "set by user" : "auto", cls.n_notes, confidence);
+                     INSTR_NAMES[final_label], override_set ? "set by user" : "auto",
+                     cls[classifier_mic].n_notes, confidence);
             store_commit_session(start_wall, (uint32_t)(dur / 1000), final_label);
             pending = (pending_t){
                 .valid = true, .end_ms = t, .label = final_label, .confidence = confidence,
                 .by_user = override_set, .hour = session_hour, .secs = (uint32_t)(dur / 1000),
             };
-            cls_session_features(&cls, pending.feat, pending.fvalid);
+            cls_session_features(&cls[classifier_mic], pending.feat, pending.fvalid);
             override_set = false;
             break;
         }
@@ -376,7 +413,7 @@ static void audio_task(void *arg)
             .last_active_ms = sess.last_active,
             .instrument = label,
             .confidence = confidence,
-            .n_notes = cls.n_notes,
+            .n_notes = cls[classifier_mic].n_notes,
             .set_by_user = override_set,
             .last_valid = pending.valid,
             .last_instrument = pending.label,
@@ -398,8 +435,9 @@ static void audio_task(void *arg)
         if (++log_div >= 31 * 5) {   /* every ~5 s, handy for tuning over serial */
             log_div = 0;
             ESP_LOGD(TAG, "level %.1f floor %.1f harm %.2f f0 %.0f act %.2f state %d notes %d p(piano) %.2f",
-                     o.level_db, o.floor_db, o.harmonicity, o.f0, o.activity, sess.state, cls.n_notes,
-                     cls_p_piano(&cls, &model, session_hour));
+                     o.level_db, o.floor_db, o.harmonicity, o.f0, o.activity, sess.state,
+                     cls[classifier_mic].n_notes,
+                     cls_p_piano(&cls[classifier_mic], &model, session_hour));
         }
     }
 }
