@@ -273,11 +273,10 @@ static void fmt_duration(char *buf, size_t n, int64_t ms)
 static uint32_t live_seconds_for(const live_state_t *live, instrument_t instr)
 {
     if (live->state != SS_PRACTICING || live->instrument != instr) return 0;
-    int64_t end = live->now_ms;
-    int64_t gap = live->now_ms - live->last_active_ms;
-    if (gap >= PAUSE_SHOW_MS) end = live->last_active_ms;
-    if (end <= live->start_ms) return 0;
-    return (uint32_t)((end - live->start_ms) / 1000);
+    /* Count to the last active moment, which is what the session will log.
+     * Counting to "now" overruns during a pause and then has to roll back. */
+    if (live->last_active_ms <= live->start_ms) return 0;
+    return (uint32_t)((live->last_active_ms - live->start_ms) / 1000);
 }
 
 static void set_brightness(int pct)
