@@ -29,10 +29,7 @@
 #define BOWED_MAX_DECAY  2.0f       /* dB/s: fades slower than any piano note */
 #define BOWED_MAX_DARKEN 2.0f       /* dB/s: keeps its colour */
 #define BOWED_DECISIVE_N    4
-/* A real cello session may contain many short notes that look plucked to the
- * envelope features. Keep the absolute minimum to filter isolated piano
- * sustain artifacts, but don't require bowed notes to be 15% of the session. */
-#define BOWED_DECISIVE_FRAC 0.05f
+#define BOWED_DECISIVE_FRAC 0.15f
 #define BOWED_DECISIVE_LOGIT (-4.0f)
 #define AUDIO_WEIGHT     0.5f
 #define TIME_PRIOR_CAP   1.5f
